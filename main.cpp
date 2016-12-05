@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
+#include <omp.h>
 #include "BmpImage.h"
+
 
 const int BIN_COUNT=256;
 
@@ -31,17 +33,35 @@ int main(int argc, char **argv) {
     std::copy(pixelLuminosity.begin(), pixelLuminosity.end(), cpu_data);
     std::copy(pixelLuminosity.begin(), pixelLuminosity.end(), device_data);
 
+    clock_t begin = clock();
+
     histogram_cpu(cpu_data, dataSize, cpu_results);
 
+    clock_t end2 = clock();
 
+    double elapsed = (double)(end2 - begin) * 1000.0 / CLOCKS_PER_SEC;
+
+    printf("Elapsed CPU: %f ms\n", elapsed);    
+    omp_set_num_threads(10);
     int* device_results = (int*) calloc(BIN_COUNT, sizeof(int));
 
-    #pragma offload target(mic) in(dataSize) in(device_data:length(arraySize)) out(device_results:length(256))
+    double start = 0;
+    
+
+    #pragma offload target(mic) in(dataSize) in(device_data:length(arraySize)) out(device_results:length(256)) in(start) out(elapsed)
     {
+        start = omp_get_wtime();
+        #pragma omp parallel for 
         for(int i=0;i<dataSize;i++){
-            device_results[device_data[i]]++;
+            #pragma omp atomic
+                device_results[device_data[i]]++;
         }
+        elapsed = omp_get_wtime() - start;
     }
+    printf("Elapsed: %f\n", elapsed);
+
+
+    // printf("Elapsed: %d\n", end - start);
 
     int diff = 0;
     for(int i=0;i<BIN_COUNT;i++){
