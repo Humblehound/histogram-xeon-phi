@@ -5,7 +5,9 @@
 #include "BmpImage.h"
 
 
-const int BIN_COUNT=256;
+const int BIN_COUNT = 256;
+
+bool VALIDATE = false;
 
 void histogram_cpu(int *host_data, size_t data_size, int* histogram){
     for(int i=0;i<data_size;i++){
@@ -15,66 +17,70 @@ void histogram_cpu(int *host_data, size_t data_size, int* histogram){
 
 int main(int argc, char **argv) {
 
-    int *cpu_data, *cpu_results, *device_data;
+    int *cpu_data, *cpu_results, *device_data, *device_results;
 
     BmpImage *image = new BmpImage();
-    image->Load("sample1.bmp");
+    image->Load("sample8.bmp");
     printf("Image size: %dx%d\n", image->GetWidth(), image->GetHeight());
     printf("Data size : %d Bytes\n", image->GetSize());
     std::vector<int> pixelLuminosity = image->GetLuminosityVector();
 
     size_t dataSize = pixelLuminosity.size();
-    int arraySize = dataSize * sizeof(int);
+    size_t arraySize = dataSize * sizeof(int);
 
-    cpu_data = (int*) malloc(arraySize);
-    device_data = (int*) malloc(arraySize);
-    cpu_results = (int*) calloc(BIN_COUNT, sizeof(int));
+    cpu_data = (int *) malloc(arraySize);
+    device_data = (int *) malloc(arraySize);
+    cpu_results = (int *) calloc(BIN_COUNT, sizeof(int));
+    device_results = (int *) calloc(BIN_COUNT, sizeof(int));
 
     std::copy(pixelLuminosity.begin(), pixelLuminosity.end(), cpu_data);
     std::copy(pixelLuminosity.begin(), pixelLuminosity.end(), device_data);
 
-    clock_t begin = clock();
-
-    histogram_cpu(cpu_data, dataSize, cpu_results);
-
-    clock_t end2 = clock();
-
-    double elapsed = (double)(end2 - begin) * 1000.0 / CLOCKS_PER_SEC;
-
-    printf("Elapsed CPU: %f ms\n", elapsed);    
-    omp_set_num_threads(10);
-    int* device_results = (int*) calloc(BIN_COUNT, sizeof(int));
-
+    double elapsed = 0;
     double start = 0;
-    
 
-    #pragma offload target(mic) in(dataSize) in(device_data:length(arraySize)) out(device_results:length(256)) in(start) out(elapsed)
+    #pragma offload target(mic) in(dataSize) in(device_data:length(dataSize)) out(device_results:length(256)) in(start) out(elapsed)
     {
+
+        const int THREAD_COUNT = 300;
         start = omp_get_wtime();
-        #pragma omp parallel for 
-        for(int i=0;i<dataSize;i++){
-            #pragma omp atomic
-                device_results[device_data[i]]++;
+
+        __declspec (align(64)) int **histograms = new int *[THREAD_COUNT];
+        for (int i = 0; i < THREAD_COUNT; ++i)
+            histograms[i] = (int *) calloc(256, sizeof(int));
+
+        #pragma omp parallel for num_threads(THREAD_COUNT)
+        for (int i = 0; i < dataSize; i++) {
+            histograms[omp_get_thread_num()][device_data[i]]++;
         }
+
+        #pragma omp parallel for num_threads(THREAD_COUNT)
+        for (int j = 0; j < 256; j++) {
+            for (int i = 0; i < THREAD_COUNT; i++) {
+                device_results[j] += histograms[i][j];
+            }
+        }
+
         elapsed = omp_get_wtime() - start;
     }
+
     printf("Elapsed: %f\n", elapsed);
 
+    if(VALIDATE){
+        histogram_cpu(cpu_data, dataSize, cpu_results);
 
-    // printf("Elapsed: %d\n", end - start);
+        int diff = 0;
+        for(int i=0;i<BIN_COUNT;i++){
+            if(cpu_results[i] != device_results[i]){
+                diff+=cpu_results[i]-device_results[i];
+            }
+        }
 
-    int diff = 0;
-    for(int i=0;i<BIN_COUNT;i++){
-        if(cpu_results[i] != device_results[i]){
-            diff+=cpu_results[i]-device_results[i];
+        if(diff != 0){
+            printf("Histogram calculation error, total sum difference: %d\n", diff);
+        }else{
+            printf("All good!\n");
         }
     }
-
-    if(diff != 0){
-        printf("Histogram calculation error, total sum difference: %d\n", diff);
-    }else{
-        printf("All good!\n");
-    }
-
 
 }

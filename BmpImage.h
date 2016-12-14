@@ -6,11 +6,12 @@
 
 
 #pragma once
-#pragma pack(1)
 #include <string>
 #include <vector>
 #include <fstream>
 #include <cstring>
+
+#pragma pack(1)
 
 
 typedef unsigned int        DWORD;
